@@ -1,0 +1,765 @@
+// ========== CONFIGURACIÓN DE APPSHEET ==========
+// TODO: Completar estos valores con tu información de AppSheet
+const APPSHEET_APP_ID = "625a98a5-95b3-4768-86ba-e06eda7cd402"; // Tu App ID de AppSheet
+const APPSHEET_API_KEY = "V2-mLI6N-Xls51-zJMoA-AMGAB-hpjVg-30yxH-5bXeF-9Xe1X"; // Tu API Key de AppSheet
+
+// Nombres de las tablas en AppSheet
+const TABLA_VENTAS = "VENTA";
+const TABLA_DETALLES = "DETALLE";
+
+// URLs base de AppSheet API
+const APPSHEET_BASE_URL = "https://api.appsheet.com/api/v2/apps";
+
+// ========== CONFIGURACIÓN DE COLUMNAS ==========
+// Nombres de columnas en tabla VENTA
+const COL_VENTA_ID = "ID VENTA";
+const COL_VENTA_FECHA = "FECHA";
+const COL_VENTA_CLIENTE = "CLIENTE";
+const COL_VENTA_TOTAL = "TOTAL VENTA";
+
+// Nombres de columnas en tabla DETALLE
+const COL_DETALLE_ID_VENTA = "ID VENTA";
+const COL_DETALLE_ARTICULO = "ARTICULO";
+const COL_DETALLE_CANTIDAD = "CANTIDAD";
+const COL_DETALLE_PRECIO_UNITARIO = "PRECIO UNITARIO";
+const COL_DETALLE_SUBTOTAL = "SUB TOTAL";
+
+/**
+ * Función principal que maneja las peticiones GET
+ */
+function doGet(e) {
+  // Asegurarse de que 'e' y 'e.parameter' existan para evitar errores al probar directamente
+  const parameters = e ? e.parameter : {};
+  
+  try {
+    // Validar configuración de AppSheet
+    if (!APPSHEET_APP_ID || !APPSHEET_API_KEY) {
+      return HtmlService.createHtmlOutput(`
+        <div style="padding: 20px; font-family: Arial, sans-serif;">
+          <h2 style="color: #d32f2f;">⚠️ Configuración Incompleta</h2>
+          <p>Por favor, complete la configuración de AppSheet en el código:</p>
+          <ul>
+            <li><strong>APPSHEET_APP_ID:</strong> ${APPSHEET_APP_ID ? '✅ Configurado' : '❌ Falta configurar'}</li>
+            <li><strong>APPSHEET_API_KEY:</strong> ${APPSHEET_API_KEY ? '✅ Configurado' : '❌ Falta configurar'}</li>
+          </ul>
+          <p>Puede encontrar estos valores en la consola de AppSheet en la sección de API.</p>
+        </div>
+      `);
+    }
+
+    const idVenta = parameters.idVenta; // Usar 'parameters' en lugar de 'e.parameter'
+
+    if (!idVenta) {
+      return HtmlService.createHtmlOutput(`
+        <div style="padding: 20px; font-family: Arial, sans-serif;">
+          <h2 style="color: #d32f2f;">Error: Parámetro Faltante</h2>
+          <p>No se proporcionó un ID de Venta.</p>
+          <p><strong>Uso correcto:</strong></p>
+          <code>?idVenta=V001</code>
+          <p>Si está probando desde el editor de Apps Script, asegúrese de pasar un objeto de evento simulado o de usar una URL de despliegue.</p>
+        </div>
+      `);
+    }
+
+    // Obtener datos de la venta desde AppSheet
+    const infoVenta = obtenerVentaPorID(idVenta);
+    if (!infoVenta) {
+      return HtmlService.createHtmlOutput(`
+        <div style="padding: 20px; font-family: Arial, sans-serif;">
+          <h2 style="color: #d32f2f;">Venta No Encontrada</h2>
+          <p>No se encontró la venta con ID: <strong>"${idVenta}"</strong></p>
+          <p>Verifique que:</p>
+          <ul>
+            <li>El ID existe en la tabla ${TABLA_VENTAS}</li>
+            <li>La configuración de AppSheet es correcta</li>
+            <li>Los permisos de API están habilitados</li>
+          </ul>
+        </div>
+      `);
+    }
+
+    // Obtener detalles de la venta desde AppSheet
+    const detallesVenta = obtenerDetallesPorVentaID(idVenta);
+    
+    if (!detallesVenta || detallesVenta.length === 0) {
+      return HtmlService.createHtmlOutput(`
+        <div style="padding: 20px; font-family: Arial, sans-serif;">
+          <h2 style="color: #ff9800;">Sin Detalles</h2>
+          <p>Se encontró la venta con ID "<strong>${idVenta}</strong>" pero no tiene detalles asociados.</p>
+          <p>Verifique que existan registros en la tabla ${TABLA_DETALLES} con ${COL_DETALLE_ID_VENTA} = "${idVenta}"</p>
+        </div>
+      `);
+    }
+
+    // Generar y retornar la factura HTML
+    const htmlFactura = generarHtmlFactura(infoVenta, detallesVenta);
+    return HtmlService.createHtmlOutput(htmlFactura).setTitle(`Factura ${idVenta}`);
+
+  } catch (error) {
+    Logger.log("Error en doGet: " + error.toString() + " Stack: " + error.stack);
+    return HtmlService.createHtmlOutput(`
+      <div style="padding: 20px; font-family: Arial, sans-serif;">
+        <h2 style="color: #d32f2f;">Error del Sistema</h2>
+        <p>Ocurrió un error al generar la factura:</p>
+        <pre style="background: #f5f5f5; padding: 10px; border-radius: 4px;">${error.toString()}</pre>
+        <p><strong>Posibles causas:</strong></p>
+        <ul>
+          <li>Problemas de conectividad con AppSheet</li>
+          <li>API Key o App ID incorrectos</li>
+          <li>Estructura de datos diferente a la esperada</li>
+          <li>Nombres de columnas incorrectos</li>
+        </ul>
+      </div>
+    `);
+  }
+}
+
+/**
+ * Obtiene información de una venta específica desde AppSheet
+ * CORREGIDO: Usando el método Read con selector en lugar de Find
+ */
+function obtenerVentaPorID(idVenta) {
+  try {
+    const url = `${APPSHEET_BASE_URL}/${APPSHEET_APP_ID}/tables/${TABLA_VENTAS}/Action`;
+    
+    // CAMBIO PRINCIPAL: Usar Read en lugar de Find
+    const payload = {
+      "Action": "Read",
+      "Properties": {
+        "Locale": "es-ES",
+        "Timezone": "America/Panama",
+        "Selector": `Filter(${TABLA_VENTAS}, [${COL_VENTA_ID}] = "${idVenta}")`
+      }
+    };
+
+    const options = {
+      'method': 'POST',
+      'headers': {
+        'ApplicationAccessKey': APPSHEET_API_KEY,
+        'Content-Type': 'application/json'
+      },
+      'payload': JSON.stringify(payload),
+      'muteHttpExceptions': true // IMPORTANTE: Para ver el error completo
+    };
+
+    Logger.log("Consultando venta con ID: " + idVenta);
+    Logger.log("Payload enviado: " + JSON.stringify(payload));
+    
+    const response = UrlFetchApp.fetch(url, options);
+    const responseCode = response.getResponseCode();
+    const responseText = response.getContentText();
+    
+    Logger.log("Código de respuesta: " + responseCode);
+    Logger.log("Respuesta completa: " + responseText);
+
+    if (responseCode !== 200) {
+      throw new Error(`Error HTTP ${responseCode}: ${responseText}`);
+    }
+
+    const responseData = JSON.parse(responseText);
+    
+    if (responseData && responseData.length > 0) {
+      const venta = responseData[0];
+      return {
+        id: venta[COL_VENTA_ID],
+        fechaHora: formatDateWithTime(venta[COL_VENTA_FECHA]),
+        cliente: venta[COL_VENTA_CLIENTE] || 'Cliente no especificado',
+        total: formatCurrency(venta[COL_VENTA_TOTAL])
+      };
+    }
+
+    return null;
+
+  } catch (error) {
+    Logger.log("Error al obtener venta desde AppSheet: " + error.toString());
+    throw new Error("No se pudo conectar con AppSheet para obtener la venta: " + error.message);
+  }
+}
+
+/**
+ * Obtiene los detalles de una venta desde AppSheet
+ * CORREGIDO: Usando el método Read con selector en lugar de Find
+ */
+function obtenerDetallesPorVentaID(idVenta) {
+  try {
+    const url = `${APPSHEET_BASE_URL}/${APPSHEET_APP_ID}/tables/${TABLA_DETALLES}/Action`;
+    
+    // CAMBIO PRINCIPAL: Usar Read con selector en lugar de Find
+    const payload = {
+      "Action": "Read",
+      "Properties": {
+        "Locale": "es-ES",
+        "Timezone": "America/Panama",
+        "Selector": `Filter(${TABLA_DETALLES}, [${COL_DETALLE_ID_VENTA}] = "${idVenta}")`
+      }
+    };
+
+    const options = {
+      'method': 'POST',
+      'headers': {
+        'ApplicationAccessKey': APPSHEET_API_KEY,
+        'Content-Type': 'application/json'
+      },
+      'payload': JSON.stringify(payload),
+      'muteHttpExceptions': true // IMPORTANTE: Para ver el error completo
+    };
+
+    Logger.log("Consultando detalles para venta ID: " + idVenta);
+    Logger.log("Payload enviado: " + JSON.stringify(payload));
+    
+    const response = UrlFetchApp.fetch(url, options);
+    const responseCode = response.getResponseCode();
+    const responseText = response.getContentText();
+    
+    Logger.log("Código de respuesta: " + responseCode);
+    Logger.log("Respuesta completa: " + responseText);
+
+    if (responseCode !== 200) {
+      throw new Error(`Error HTTP ${responseCode}: ${responseText}`);
+    }
+
+    const responseData = JSON.parse(responseText);
+
+    if (responseData && Array.isArray(responseData)) {
+      return responseData.map(detalle => ({
+        articulo: detalle[COL_DETALLE_ARTICULO] || 'Artículo no especificado',
+        cantidad: detalle[COL_DETALLE_CANTIDAD] || 0,
+        precioUnitario: formatCurrency(detalle[COL_DETALLE_PRECIO_UNITARIO]),
+        subtotal: formatCurrency(detalle[COL_DETALLE_SUBTOTAL])
+      }));
+    }
+
+    return [];
+
+  } catch (error) {
+    Logger.log("Error al obtener detalles desde AppSheet: " + error.toString());
+    throw new Error("No se pudo conectar con AppSheet para obtener detalles: " + error.message);
+  }
+}
+
+/**
+ * NUEVA FUNCIÓN: Método alternativo usando solo Read sin filtros
+ * Útil si el método con Selector no funciona
+ */
+function obtenerVentaPorIDAlternativo(idVenta) {
+  try {
+    const url = `${APPSHEET_BASE_URL}/${APPSHEET_APP_ID}/tables/${TABLA_VENTAS}/Action`;
+    
+    const payload = {
+      "Action": "Read",
+      "Properties": {
+        "Locale": "es-ES",
+        "Timezone": "America/Panama"
+      }
+    };
+
+    const options = {
+      'method': 'POST',
+      'headers': {
+        'ApplicationAccessKey': APPSHEET_API_KEY,
+        'Content-Type': 'application/json'
+      },
+      'payload': JSON.stringify(payload),
+      'muteHttpExceptions': true
+    };
+
+    Logger.log("Obteniendo todas las ventas para filtrar localmente...");
+    
+    const response = UrlFetchApp.fetch(url, options);
+    const responseCode = response.getResponseCode();
+    const responseText = response.getContentText();
+    
+    if (responseCode !== 200) {
+      throw new Error(`Error HTTP ${responseCode}: ${responseText}`);
+    }
+
+    const responseData = JSON.parse(responseText);
+    
+    if (responseData && Array.isArray(responseData)) {
+      // Filtrar localmente por ID
+      const ventaEncontrada = responseData.find(venta => 
+        venta[COL_VENTA_ID] === idVenta
+      );
+      
+      if (ventaEncontrada) {
+        return {
+          id: ventaEncontrada[COL_VENTA_ID],
+          fechaHora: formatDateWithTime(ventaEncontrada[COL_VENTA_FECHA]),
+          cliente: ventaEncontrada[COL_VENTA_CLIENTE] || 'Cliente no especificado',
+          total: formatCurrency(ventaEncontrada[COL_VENTA_TOTAL])
+        };
+      }
+    }
+
+    return null;
+
+  } catch (error) {
+    Logger.log("Error en método alternativo: " + error.toString());
+    throw new Error("Error en método alternativo: " + error.message);
+  }
+}
+
+/**
+ * Formatea números como moneda
+ */
+function formatCurrency(number) {
+  if (typeof number !== 'number') {
+    const parsed = parseFloat(number);
+    if (isNaN(parsed)) {
+      return '$0.00'; 
+    }
+    number = parsed;
+  }
+  return "$" + number.toFixed(2).replace(/\d(?=(\d{3})+\.)/g, '$&,');
+}
+
+/**
+ * Formatea fechas con hora
+ */
+function formatDateWithTime(dateObject) {
+  let parsedDate = null;
+  
+  // Caso 1: Ya es un objeto Date válido
+  if (dateObject instanceof Date && !isNaN(dateObject)) {
+    parsedDate = dateObject;
+  } 
+  // Caso 2: String que puede ser parseado como fecha
+  else if (typeof dateObject === 'string' && dateObject.trim() !== '') {
+    const attemptedParse = new Date(dateObject);
+    if (!isNaN(attemptedParse)) {
+      parsedDate = attemptedParse;
+    }
+  }
+  // Caso 3: Número (timestamp)
+  else if (typeof dateObject === 'number' && !isNaN(dateObject)) {
+    const attemptedParse = new Date(dateObject);
+    if (!isNaN(attemptedParse)) {
+      parsedDate = attemptedParse;
+    }
+  }
+
+  if (parsedDate) {
+    const day = ('0' + parsedDate.getDate()).slice(-2);
+    const month = ('0' + (parsedDate.getMonth() + 1)).slice(-2);
+    const year = parsedDate.getFullYear();
+    const hours = ('0' + parsedDate.getHours()).slice(-2);
+    const minutes = ('0' + parsedDate.getMinutes()).slice(-2);
+    return `${day}/${month}/${year} ${hours}:${minutes}`;
+  }
+  
+  Logger.log("formatDateWithTime recibió un valor no formateable: " + JSON.stringify(dateObject) + " (tipo: " + typeof dateObject + ")");
+  return new Date().toLocaleDateString('es-ES'); // Fecha actual como fallback
+}
+
+/**
+ * Genera el HTML de la factura
+ */
+function generarHtmlFactura(infoVenta, detallesVenta) {
+  let itemsHtml = "";
+  detallesVenta.forEach(item => {
+    itemsHtml += `
+      <tr class="item">
+        <td class="text-left">${escapeHtml(item.articulo)}</td>
+        <td class="text-right">${item.cantidad}</td>
+        <td class="text-right">${item.precioUnitario}</td>
+        <td class="text-right">${item.subtotal}</td>
+      </tr>
+    `;
+  });
+
+  const fechaHoraFactura = infoVenta.fechaHora || new Date().toLocaleDateString('es-ES');
+
+  const html = `
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Factura ${escapeHtml(infoVenta.id)}</title>
+      <style>
+        body { 
+          font-family: 'Helvetica Neue', 'Helvetica', Helvetica, Arial, sans-serif; 
+          margin: 0; 
+          padding: 0; 
+          color: #555; 
+          background-color: #f8f9fa;
+        }
+        .invoice-box { 
+          max-width: 1000px; 
+          margin: 20px auto; 
+          padding: 35px; 
+          border: 1px solid #eee; 
+          box-shadow: 0 0 15px rgba(0, 0, 0, 0.1); 
+          font-size: 16px; 
+          line-height: 1.6; 
+          background-color: white;
+          border-radius: 8px;
+        }
+        .invoice-box table { 
+          width: 100%; 
+          line-height: inherit; 
+          text-align: left; 
+          border-collapse: collapse; 
+        }
+        .invoice-box table td { 
+          padding: 8px; 
+          vertical-align: top; 
+        } 
+        .invoice-box table tr.top table td { 
+          padding-bottom: 15px; 
+        } 
+        .invoice-box table tr.top table td.title img { 
+          width: 100%; 
+          max-width: 120px; 
+        } 
+        .invoice-box table tr.information table td { 
+          padding-bottom: 20px; 
+        } 
+        .invoice-box table tr.heading td { 
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+          color: white;
+          border-bottom: 1px solid #ddd; 
+          font-weight: bold; 
+          text-align: left;
+          padding: 12px 8px;
+        }
+        .invoice-box table tr.heading td:nth-child(n+2) { 
+          text-align: right; 
+        }
+        .invoice-box table tr.details td { 
+          padding-bottom: 15px; 
+        } 
+        .invoice-box table tr.item td { 
+          border-bottom: 1px solid #eee; 
+          text-align: left;
+          padding: 10px 8px;
+        }
+        .invoice-box table tr.item td:nth-child(n+2) { 
+          text-align: right; 
+        }
+        .invoice-box table tr.item:hover {
+          background-color: #f8f9fa;
+        }
+        .invoice-box table tr.item.last td { 
+          border-bottom: none; 
+        }
+        .invoice-box table tr.total td { 
+          border-top: 2px solid #667eea; 
+          font-weight: bold; 
+          font-size: 18px;
+          padding: 15px 8px;
+          background-color: #f8f9fa;
+        } 
+        .text-right { 
+          text-align: right !important; 
+        }
+        .text-left { 
+          text-align: left !important; 
+        }
+        .company-details { 
+          text-align: right; 
+        }
+        .company-details h2 { 
+          margin: 0 0 5px 0; 
+          font-size: 1.5em; 
+          color: #333; 
+          font-weight: 600;
+        }
+        .company-details div {
+          color: #666;
+          margin-bottom: 3px;
+        }
+        .thank-you-message {
+          text-align: center; 
+          margin-top: 30px; 
+          padding: 20px;
+          font-size: 18px;  
+          color: #667eea;
+          font-weight: 500;
+          border-top: 1px solid #eee;
+        }
+        .invoice-header {
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          color: white;
+          padding: 20px;
+          margin: -35px -35px 30px -35px;
+          border-radius: 8px 8px 0 0;
+        }
+        .invoice-number {
+          font-size: 24px;
+          font-weight: bold;
+          text-align: center;
+          margin-bottom: 10px;
+        }
+        .appsheet-badge {
+          position: absolute;
+          top: 10px;
+          right: 10px;
+          background: rgba(255,255,255,0.2);
+          padding: 5px 10px;
+          border-radius: 15px;
+          font-size: 12px;
+          font-weight: bold;
+        }
+        @media print {
+          body { 
+            -webkit-print-color-adjust: exact; 
+            print-color-adjust: exact; 
+            background-color: white;
+          }
+          .invoice-box { 
+            box-shadow: none; 
+            border: 1px solid #000; 
+            margin: 0; 
+            padding: 20px; 
+            font-size: 12pt;
+            border-radius: 0;
+          }
+          .invoice-header {
+            background: #667eea !important;
+            margin: -20px -20px 20px -20px;
+          }
+          .appsheet-badge {
+            display: none;
+          }
+        }
+        @media (max-width: 600px) {
+          .invoice-box {
+            margin: 10px;
+            padding: 20px;
+          }
+          .invoice-box table tr.heading td,
+          .invoice-box table tr.item td {
+            font-size: 14px;
+            padding: 6px 4px;
+          }
+        }
+      </style>
+    </head>
+    <body>
+      <div class="invoice-box">
+        <div class="invoice-header">
+          <div class="appsheet-badge">Powered by AppSheet</div>
+          <div class="invoice-number">FACTURA #${escapeHtml(infoVenta.id)}</div>
+          <div style="text-align: center; font-size: 14px;">GM SOLUTIONS</div>
+        </div>
+        
+        <table cellpadding="0" cellspacing="0">
+          <tr class="top">
+            <td colspan="4">
+              <table>
+                <tr>
+                  <td class="title">
+                    <div style="font-size: 24px; font-weight: bold; color: #667eea;">GM</div>
+                    <div style="font-size: 16px; color: #888;">SOLUTIONS</div>
+                  </td>
+                  <td class="company-details">
+                    <h2>GM SOLUTIONS</h2>
+                    <div>David, Panamá</div>
+                    <div>Teléfono: (555) 123-4567</div>
+                    <div>Email: guidomoreno787@gmail.com</div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr class="information">
+            <td colspan="4">
+              <table>
+                <tr>
+                  <td>
+                    <strong style="color: #667eea;">Facturar a:</strong><br>
+                    <div style="margin-top: 5px; font-size: 16px;">
+                      ${escapeHtml(infoVenta.cliente)}
+                    </div>
+                  </td>
+                  <td class="text-right">
+                    <strong style="color: #667eea;">Detalles de Factura:</strong><br>
+                    <div style="margin-top: 5px;">
+                      <strong>Factura #:</strong> ${escapeHtml(infoVenta.id)}<br>
+                      <strong>Fecha y Hora:</strong> ${escapeHtml(fechaHoraFactura)}
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr class="heading">
+            <td class="text-left">Artículo</td>
+            <td class="text-right">Cantidad</td>
+            <td class="text-right">Precio Unit.</td>
+            <td class="text-right">Subtotal</td>
+          </tr>
+          ${itemsHtml}
+          <tr class="total">
+            <td colspan="3" class="text-right">
+              <strong style="color: #667eea;">TOTAL A PAGAR:</strong>
+            </td>
+            <td class="text-right">
+              <strong style="color: #667eea; font-size: 20px;">${infoVenta.total}</strong>
+            </td>
+          </tr>
+        </table>
+        <div class="thank-you-message"> 
+          <p>¡Gracias por confiar en nosotros!</p>
+          <p style="font-size: 14px; color: #888; margin-top: 10px;">
+            Factura generada desde AppSheet • Para consultas: (555) 123-4567
+          </p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+  return html;
+}
+
+/**
+ * Función helper para escapar HTML y prevenir XSS
+ */
+function escapeHtml(text) {
+  if (typeof text !== 'string') {
+    return text;
+  }
+  const map = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#039;'
+  };
+  return text.replace(/[&<>"']/g, function(m) { return map[m]; });
+}
+
+/**
+ * NUEVA FUNCIÓN: Prueba paso a paso con diagnósticos detallados
+ */
+function diagnosticarConexionAppSheet() {
+  Logger.log("=== DIAGNÓSTICO DETALLADO DE APPSHEET ===");
+  
+  // Paso 1: Verificar configuración
+  Logger.log("1. VERIFICANDO CONFIGURACIÓN:");
+  Logger.log("   - App ID: " + (APPSHEET_APP_ID ? "✅ Presente" : "❌ Falta"));
+  Logger.log("   - API Key: " + (APPSHEET_API_KEY ? "✅ Presente" : "❌ Falta"));
+  Logger.log("   - URL Base: " + APPSHEET_BASE_URL);
+  
+  if (!APPSHEET_APP_ID || !APPSHEET_API_KEY) {
+    Logger.log("❌ ERROR: Configuración incompleta");
+    return;
+  }
+  
+  // Paso 2: Probar conexión básica
+  Logger.log("\n2. PROBANDO CONEXIÓN BÁSICA:");
+  try {
+    const url = `${APPSHEET_BASE_URL}/${APPSHEET_APP_ID}/tables/${TABLA_VENTAS}/Action`;
+    
+    const payload = {
+      "Action": "Read",
+      "Properties": {
+        "Locale": "es-ES",
+        "Timezone": "America/Panama"
+      }
+    };
+
+    const options = {
+      'method': 'POST',
+      'headers': {
+        'ApplicationAccessKey': APPSHEET_API_KEY,
+        'Content-Type': 'application/json'
+      },
+      'payload': JSON.stringify(payload),
+      'muteHttpExceptions': true
+    };
+
+    Logger.log("   - URL: " + url);
+    Logger.log("   - Payload: " + JSON.stringify(payload));
+    
+    const response = UrlFetchApp.fetch(url, options);
+    const responseCode = response.getResponseCode();
+    const responseText = response.getContentText();
+    
+    Logger.log("   - Código de respuesta: " + responseCode);
+    Logger.log("   - Respuesta (primeros 500 chars): " + responseText.substring(0, 500));
+    
+    if (responseCode === 200) {
+      Logger.log("✅ CONEXIÓN EXITOSA");
+      const data = JSON.parse(responseText);
+      Logger.log("   - Registros encontrados: " + (Array.isArray(data) ? data.length : "No es array"));
+      
+      if (Array.isArray(data) && data.length > 0) {
+        Logger.log("   - Ejemplo de registro: " + JSON.stringify(data[0]));
+        Logger.log("   - Columnas disponibles: " + Object.keys(data[0]).join(", "));
+      }
+    } else {
+      Logger.log("❌ ERROR HTTP " + responseCode);
+      Logger.log("   - Respuesta completa: " + responseText);
+    }
+    
+  } catch (error) {
+    Logger.log("❌ EXCEPCIÓN: " + error.toString());
+  }
+  
+  Logger.log("\n=== FIN DEL DIAGNÓSTICO ===");
+}
+
+/**
+ * Función para probar una venta específica con diagnósticos
+ */
+function probarVentaEspecifica(idVenta = "V001") {
+  Logger.log("=== PROBANDO VENTA ESPECÍFICA: " + idVenta + " ===");
+  
+  try {
+    // Método 1: Con selector
+    Logger.log("\n1. PROBANDO MÉTODO CON SELECTOR:");
+    const venta1 = obtenerVentaPorID(idVenta);
+    if (venta1) {
+      Logger.log("✅ Venta encontrada con selector: " + JSON.stringify(venta1));
+    } else {
+      Logger.log("❌ No se encontró la venta con selector");
+    }
+    
+    // Método 2: Sin selector (obtener todas y filtrar)
+    Logger.log("\n2. PROBANDO MÉTODO ALTERNATIVO:");
+    const venta2 = obtenerVentaPorIDAlternativo(idVenta);
+    if (venta2) {
+      Logger.log("✅ Venta encontrada con método alternativo: " + JSON.stringify(venta2));
+    } else {
+      Logger.log("❌ No se encontró la venta con método alternativo");
+    }
+    
+    // Probar detalles si se encontró la venta
+    if (venta1 || venta2) {
+      Logger.log("\n3. PROBANDO DETALLES DE LA VENTA:");
+      const detalles = obtenerDetallesPorVentaID(idVenta);
+      if (detalles && detalles.length > 0) {
+        Logger.log("✅ Detalles encontrados: " + detalles.length + " items");
+        Logger.log("   - Primer detalle: " + JSON.stringify(detalles[0]));
+      } else {
+        Logger.log("❌ No se encontraron detalles para la venta");
+      }
+    }
+    
+  } catch (error) {
+    Logger.log("❌ ERROR GENERAL: " + error.toString());
+    Logger.log("   Stack: " + error.stack);
+  }
+  
+  Logger.log("\n=== FIN DE PRUEBA DE VENTA ESPECÍFICA ===");
+}
+
+/**
+ * Función de prueba principal que ejecuta todos los diagnósticos
+ */
+function ejecutarDiagnosticoCompleto() {
+  Logger.log("🔍 INICIANDO DIAGNÓSTICO COMPLETO DE APPSHEET");
+  Logger.log("=".repeat(50));
+  
+  // Ejecutar diagnósticos en orden
+  diagnosticarConexionAppSheet();
+  
+  Logger.log("\n" + "=".repeat(50));
+  
+  probarVentaEspecifica("V001"); // Cambiar por un ID que sepas que existe
+  
+  Logger.log("\n🏁 DIAGNÓSTICO COMPLETO FINALIZADO");
+  Logger.log("Revise los logs anteriores para identificar el problema específico.");
+}
